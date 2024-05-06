@@ -25,7 +25,7 @@ TEST_PATH=  BASE_DIR + "data/datasets/scierc/scierc_test_aug.json"
 TYPES_PATH= BASE_DIR + "data/datasets/scierc/scierc_types.json"
 
 #==============================================================
-TRAIN = False ##for evaluation
+TRAIN = True ##for evaluation
 #==============================================================
 MODEL_PATH = SAVE_PATH + "'scierc_train'/2024-05-04_20-18-49.042142/final_model/"
 
