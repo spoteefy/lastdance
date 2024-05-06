@@ -1,9 +1,8 @@
-## Trích rút Thực thể và Quan hệ trong Tài liệu Khoa học - ĐATN 20232
-1. Thiết lập tham số, đường dẫn các tài nguyên, TRAIN = True (cho huấn luyện)/FALSE (cho kiểm thử) trong tệp main.py.
-2. Cài đặt thư viện Python cần thiết
-3. Chạy: python3 main.py
+## Nhận dạng thực thể và trích rút quan hệ trên tập tài liệu nghiên cứu khoa học
+## Đồ án tốt nghiệp cử nhân -SoICT- 20232
+**Ghi chú:** Thiết lập tham số, đường dẫn các tài nguyên, TRAIN = True (cho huấn luyện)/FALSE (cho kiểm thử) trong tệp main.py.
 
-## Ghi chú
+## Lưu ý
 Để huấn luyện với mô hình SciBERT, tải xuống SciBERT từ https://github.com/allenai/scibert ("PyTorch HuggingFace Models") và thiết đặt "model_path" và "tokenizer_path" trong tệp cấu hình.
 
-Mô hình ĐATN cải tiến từ SpERT (https://github.com/lavis-nlp/spert/)
+Mô hình đề xuất cải tiến từ SpERT (https://github.com/lavis-nlp/spert/)
