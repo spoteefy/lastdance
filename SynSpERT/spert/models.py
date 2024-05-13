@@ -94,7 +94,7 @@ class SpERT(BertPreTrainedModel):
                  ):
 
         super(SpERT, self).__init__(config)
-        self._use_pos = False
+        self._use_pos = use_pos
         self._pos_embedding = 25  # Kích thước nhúng #POS (part-of-speech) phải phù hợp với kích thước
                                   # BERT embedding size, xác định bởi config.hidden_size
         self._use_entity_clf = use_entity_clf
@@ -121,7 +121,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 4658
+        relc_in_dim = 4527
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -140,21 +140,21 @@ class SpERT(BertPreTrainedModel):
         dropout_rate = 0.3
 
         self.projection_entity = nn.Sequential(
-            nn.Linear(1536, proj_dim),
+            nn.Linear(1586, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
             )
 
         self.projection_context = nn.Sequential(
-            nn.Linear(embed_dim, proj_dim),
+            nn.Linear(793, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
             )
 
         self.highwaynet = Highway(num_highway_layers=2,
-                                    input_size = 2304)
+                                    input_size = 2379)
 
         self.init_weights()
 
@@ -239,9 +239,9 @@ class SpERT(BertPreTrainedModel):
         # print("rel_ctx: ", rel_ctx.size())
         # print("entity_pairs:", entity_pairs1.size())
 
-        # multihead_attn = torch.nn.MultiheadAttention(256, 16)
-        # rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
-        # full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
+        multihead_attn = torch.nn.MultiheadAttention(256, 16)
+        rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
+        full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
 
         
         # max pooling
@@ -253,8 +253,8 @@ class SpERT(BertPreTrainedModel):
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
         
-        rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        # rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        # rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
         rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
         rel_repr2 = self.highwaynet(rel_repr2)
         rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
