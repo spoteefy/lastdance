@@ -50,6 +50,36 @@ def get_token(h: torch.tensor, x: torch.tensor, token: int):  # token: Định d
     
     return token_h
 
+
+class Highway(nn.Module):
+    r"""Highway Layers
+    Args:
+        - num_highway_layers(int): number of highway layers.
+        - input_size(int): size of highway input.
+    """
+
+    def __init__(self, num_highway_layers, input_size):
+        super(Highway, self).__init__()
+        self.num_highway_layers = num_highway_layers
+        self.non_linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.gate = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        for layer in range(self.num_highway_layers):
+            gate = torch.sigmoid(self.gate[layer](x))
+            # Compute percentage of non linear information to be allowed for each element in x
+            non_linear = F.relu(self.non_linear[layer](x))
+            # Compute non linear information
+            linear = self.linear[layer](x)
+            # Compute linear information
+            x = gate * non_linear + (1 - gate) * linear
+            # Combine non linear and linear information according to gate
+            x = self.dropout(x)
+        return x
+
+
 class SpERT(BertPreTrainedModel):
     """ Span-based model to jointly extract entities and relations """
 
@@ -64,7 +94,7 @@ class SpERT(BertPreTrainedModel):
                  ):
 
         super(SpERT, self).__init__(config)
-        self._use_pos = use_pos
+        self._use_pos = False
         self._pos_embedding = 25  # Kích thước nhúng #POS (part-of-speech) phải phù hợp với kích thước
                                   # BERT embedding size, xác định bởi config.hidden_size
         self._use_entity_clf = use_entity_clf
@@ -85,12 +115,14 @@ class SpERT(BertPreTrainedModel):
         # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier
         # (ENT + SIZE)*2 + SPAN = 3H + SIZE
 
-        relc_in_dim =  (config.hidden_size ) * 4 + size_embedding * 2 
-        if (self._use_entity_clf != "none"): # Tăng cường biểu diễn cho cặp entity trong rel_classifier
-            relc_in_dim +=  entity_types * 2 
-        if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
-            relc_in_dim +=  self._pos_embedding * 4
-
+        # relc_in_dim =  (config.hidden_size ) * 4 + size_embedding * 2 
+        # if (self._use_entity_clf != "none"): # Tăng cường biểu diễn cho cặp entity trong rel_classifier
+        #     relc_in_dim +=  entity_types * 2 
+        # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
+        #     relc_in_dim +=  self._pos_embedding * 4
+        
+        relc_in_dim = 4402
+        
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
         self.size_embeddings = nn.Embedding(100, size_embedding)
@@ -102,7 +134,28 @@ class SpERT(BertPreTrainedModel):
         self._entity_types = entity_types
         self._max_pairs = max_pairs
 
-        # Khởi tạo trọng số
+        embed_dim = 768
+        hidden_dim = config.hidden_size
+        proj_dim = 256
+        dropout_rate = 0.3
+
+        self.projection_entity = nn.Sequential(
+            nn.Linear(1536, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
+        self.projection_context = nn.Sequential(
+            nn.Linear(embed_dim, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
+        self.highwaynet = Highway(num_highway_layers=2,
+                                    input_size = 2304)
+
         self.init_weights()
 
         if freeze_transformer:
@@ -111,6 +164,7 @@ class SpERT(BertPreTrainedModel):
             # Đóng băng tham số BERT (huấn luyện đóng băng)
             for param in self.bert.parameters():
                 param.requires_grad = False
+    
 
     def _run_entity_classifier (self, x: torch.tensor):
         y = self.entity_classifier(x)
@@ -132,10 +186,10 @@ class SpERT(BertPreTrainedModel):
         entity_spans_pool = m + hlarge.unsqueeze(1).repeat(1, entity_masks.shape[1], 1, 1) #torch.Size([10, 105, 40, 768])
         entity_spans_pool = entity_spans_pool.max(dim=2)[0]
         
-        #Lấy token 'CLS' làm đại diện ngữ cảnh ứng viên
+        # Lấy token 'CLS' làm đại diện ngữ cảnh ứng viên
         entity_ctx = get_token(h, encodings, self._cls_token)
         
-        #Tạo các biểu diễn ứng viên bao gồm ngữ cảnh, max-pool span và size embedding
+        # Tạo các biểu diễn ứng viên bao gồm ngữ cảnh, max-pool span và size embedding
         entity_repr = torch.cat([entity_ctx.unsqueeze(1).repeat(1, entity_spans_pool.shape[1], 1),
                                  entity_spans_pool, size_embeddings], dim=2)
         entity_repr = self.dropout(entity_repr)
@@ -162,7 +216,6 @@ class SpERT(BertPreTrainedModel):
 
         # Lấy biểu diễn cặp thực thể ứng viên
         entity_pairs = util.batch_index(entity_spans, relations)
-        entity_pairs1 = entity_pairs.max(dim=2)[0]
         entity_pairs = entity_pairs.view(batch_size, entity_pairs.shape[1], -1)
 
         # Lấy size embeddings tương ứng
@@ -173,19 +226,24 @@ class SpERT(BertPreTrainedModel):
         # Đánh dấu non-entity candidate tokens
         m = ((rel_masks == 0).float() * (-1e30)).unsqueeze(-1)
         rel_ctx =  m + hlarge1
-        # print("rel_ctx: ", rel_ctx.size())
-        # print("entity_pairs:", entity_pairs1.size())
-        rel_ctx = rel_ctx.max(dim=2)[0]
-        full_ctx = rel_ctx # có vẻ là ngữ cảnh toàn cục
-        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 
-        # dựa vào rel_mask để đặt các ngữ cảnh 
-        # xung quanh là 0
 
+        rel_ctx = rel_ctx.max(dim=2)[0]
+        full_ctx = rel_ctx # ngữ cảnh toàn cục
+        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
+
+        rel_ctx_pro = self.projection_context(rel_ctx)
+        full_ctx_pro = self.projection_context(full_ctx)
+        entity_pairs_pro = self.projection_entity(entity_pairs)
+        
+        # print("rel_ctx_pro:", rel_ctx_pro.size()) 
         # print("rel_ctx: ", rel_ctx.size())
         # print("entity_pairs:", entity_pairs1.size())
-        multihead_attn = torch.nn.MultiheadAttention(793, 13)
-        rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs1, rel_ctx, rel_ctx)
-        full_local_ctx, attn_output_weights = multihead_attn(entity_pairs1, full_ctx, full_ctx)
+
+        multihead_attn = torch.nn.MultiheadAttention(256, 16)
+        rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
+        full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
+
+        
         # max pooling
         # rel_ctx = rel_ctx.max(dim=2)[0]
         # Đặt vector ngữ cảnh của các ứng viên thực thể lân cận hoặc liền kề thành không
@@ -197,6 +255,9 @@ class SpERT(BertPreTrainedModel):
         
         # rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
         rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
+        rel_repr2 = self.highwaynet(rel_repr2)
+        rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
 
         # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
         if (entity_clf != None):
