@@ -121,7 +121,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 4402
+        relc_in_dim = 4658
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -239,9 +239,9 @@ class SpERT(BertPreTrainedModel):
         # print("rel_ctx: ", rel_ctx.size())
         # print("entity_pairs:", entity_pairs1.size())
 
-        multihead_attn = torch.nn.MultiheadAttention(256, 16)
-        rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
-        full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
+        # multihead_attn = torch.nn.MultiheadAttention(256, 16)
+        # rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
+        # full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
 
         
         # max pooling
@@ -253,8 +253,8 @@ class SpERT(BertPreTrainedModel):
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
         
-        # rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        # rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
         rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
         rel_repr2 = self.highwaynet(rel_repr2)
         rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
