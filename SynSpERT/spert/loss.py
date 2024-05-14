@@ -39,7 +39,7 @@ class SpERTLoss(Loss):
             rel_loss = (rel_loss * rel_sample_masks).sum() / rel_count
 
             # joint loss
-            train_loss = 0.4 * entity_loss + 0.6 * rel_loss
+            train_loss = 0.5 * entity_loss + 0.5 * rel_loss
         else:
             # corner case: no positive/negative relation samples
             train_loss = entity_loss
