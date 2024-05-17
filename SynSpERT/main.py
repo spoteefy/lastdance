@@ -31,7 +31,7 @@ MODEL_PATH = SAVE_PATH + "'scierc_train'/2024-05-04_20-18-49.042142/final_model/
 
 #==============================================================
 SEED=656 
-USE_POS= False
+USE_POS= '--use_pos'
 USE_ENTITY_CLF='none'     # Choices: none, logits, softmax, onehot
 
 if __name__ == "__main__": 
