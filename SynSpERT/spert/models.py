@@ -94,7 +94,7 @@ class SpERT(BertPreTrainedModel):
                  ):
 
         super(SpERT, self).__init__(config)
-        self._use_pos = False
+        self._use_pos = True
         self._pos_embedding = 25  # Kích thước nhúng #POS (part-of-speech) phải phù hợp với kích thước
                                   # BERT embedding size, xác định bởi config.hidden_size
         self._use_entity_clf = use_entity_clf
@@ -121,7 +121,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 4658
+        relc_in_dim = 4808
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -134,13 +134,13 @@ class SpERT(BertPreTrainedModel):
         self._entity_types = entity_types
         self._max_pairs = max_pairs
 
-        embed_dim = 768
+        embed_dim = 793
         hidden_dim = config.hidden_size
         proj_dim = 256
         dropout_rate = 0.3
 
         self.projection_entity = nn.Sequential(
-            nn.Linear(1536, proj_dim),
+            nn.Linear(1586, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
@@ -154,7 +154,7 @@ class SpERT(BertPreTrainedModel):
             )
 
         self.highwaynet = Highway(num_highway_layers=2,
-                                    input_size = 2304)
+                                    input_size = 2379)
 
         self.init_weights()
 
@@ -478,6 +478,5 @@ _MODELS = {
 
 def get_model(name):
     return _MODELS[name]
-
 
 
