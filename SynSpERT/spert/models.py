@@ -94,7 +94,7 @@ class SpERT(BertPreTrainedModel):
                  ):
 
         super(SpERT, self).__init__(config)
-        self._use_pos = False
+        self._use_pos = True
         self._pos_embedding = 25  # Kích thước nhúng #POS (part-of-speech) phải phù hợp với kích thước
                                   # BERT embedding size, xác định bởi config.hidden_size
         self._use_entity_clf = use_entity_clf
@@ -121,7 +121,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 2098
+        relc_in_dim = 2148
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -140,14 +140,14 @@ class SpERT(BertPreTrainedModel):
         dropout_rate = 0.3
 
         self.projection_entity = nn.Sequential(
-            nn.Linear(1536, proj_dim),
+            nn.Linear(1586, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
             )
 
         self.projection_context = nn.Sequential(
-            nn.Linear(768, proj_dim),
+            nn.Linear(793, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
@@ -254,11 +254,26 @@ class SpERT(BertPreTrainedModel):
         # và các size embedding tương ứng
         
         # rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr = torch.cat( [entity_pairs, rel_local_ctx, full_local_ctx, size_pair_embeddings], dim=2)
         # rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
         # rel_repr2 = self.highwaynet(rel_repr2)
         # rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
 
+        # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
+        if (entity_clf != None):
+         if (self._use_entity_clf == "logits" or self._use_entity_clf == "softmax" 
+                                              or self._use_entity_clf == "onehot"):
+            if (self._use_entity_clf == "softmax"):
+                entity_clf = torch.softmax(entity_clf, dim=-1)
+
+            elif (self._use_entity_clf == "onehot"):
+                dim = entity_clf.shape[-1]
+                entity_clf = torch.argmax(entity_clf, dim=-1)
+                entity_clf = torch.nn.functional.one_hot(entity_clf, dim) # Lấy kiểu thực thể (bao gồm none)
+            # Các dòng sau được thực thi nếu self._use_entity_clf là một trong các giá trị "logits", "softmax", "onehot"   
+            entity_clf_pairs =  util.batch_index(entity_clf, relations)
+            entity_clf_pairs =  entity_clf_pairs.view(batch_size, entity_clf_pairs.shape[1], -1)
+            rel_repr = torch.cat([ rel_repr, entity_clf_pairs], dim=2)
         
         rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
@@ -463,6 +478,3 @@ _MODELS = {
 
 def get_model(name):
     return _MODELS[name]
-
-
-
