@@ -9,6 +9,8 @@ from spert import sampling
 from spert import util
 import sys
 
+import math
+from typing import Optional, List
 import numpy as np
 from torch.autograd import Variable
 import torch.nn.functional as F
@@ -23,7 +25,6 @@ import torch.nn.functional as F
 # Mỗi slot là một tokenID (số nguyên).
 
 # token: Định danh số (ID) của token mong muốn, ví dụ, 'CLS'
-
 # Ta thấy tensor 'h' chứa nhúng BERT/SciBERT của mỗi token trong câu, do đó
 # nhảy đến chỉ mục (index) của h[token]
 # h.shape= (10, 40, 768) => 10 câu mỗi câu có độ dài 40 token. [(Sentence embedding)+]
@@ -50,6 +51,126 @@ def get_token(h: torch.tensor, x: torch.tensor, token: int):  # token: Định d
     
     return token_h
 
+class PrepareForMultiHeadAttention(nn.Module):
+
+    def __init__(self, d_model: int, heads: int, d_k: int, bias: bool):
+        super().__init__()
+        # Linear layer for linear transform
+        self.linear = nn.Linear(d_model, heads * d_k, bias=bias)
+        # Number of heads
+        self.heads = heads
+        # Number of dimensions in vectors in each head
+        self.d_k = d_k
+
+    def forward(self, x: torch.Tensor):
+        # Input has shape `[seq_len, batch_size, d_model]` or `[batch_size, d_model]`.
+        # We apply the linear transformation to the last dimension and split that into
+        # the heads.
+        head_shape = x.shape[:-1]
+
+        # Linear transform
+        x = self.linear(x)
+
+        # Split last dimension into heads
+        x = x.view(*head_shape, self.heads, self.d_k)
+
+        # Output has shape `[seq_len, batch_size, heads, d_k]` or `[batch_size, heads, d_model]`
+        return x
+
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, heads: int, d_model: int, dropout_prob: float = 0.1, bias: bool = True):
+
+        super().__init__()
+
+        # Number of features per head
+        self.d_k = d_model // heads
+        # Number of heads
+        self.heads = heads
+
+        # These transform the `query`, `key` and `value` vectors for multi-headed attention.
+        self.query = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=bias)
+        self.key = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=bias)
+        self.value = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=True)
+
+        # Softmax for attention along the time dimension of `key`
+        self.softmax = nn.Softmax(dim=1)
+
+        # Output layer
+        self.output = nn.Linear(d_model, d_model)
+        # Dropout
+        self.dropout = nn.Dropout(dropout_prob)
+        # Scaling factor before the softmax
+        self.scale = 1 / math.sqrt(self.d_k)
+
+        # We store attentions so that it can be used for logging, or other computations if needed
+        self.attn = None
+
+    def get_scores(self, query: torch.Tensor, key: torch.Tensor):
+
+        # Calculate $Q K^\top$ or $S_{ijbh} = \sum_d Q_{ibhd} K_{jbhd}$
+        return torch.einsum('ibhd,jbhd->ijbh', query, key)
+
+    def prepare_mask(self, mask: torch.Tensor, query_shape: List[int], key_shape: List[int]):
+
+        assert mask.shape[0] == 1 or mask.shape[0] == query_shape[0]
+        assert mask.shape[1] == key_shape[0]
+        assert mask.shape[2] == 1 or mask.shape[2] == query_shape[1]
+
+        # Same mask applied to all heads.
+        mask = mask.unsqueeze(-1)
+
+        # resulting mask has shape `[seq_len_q, seq_len_k, batch_size, heads]`
+        return mask
+
+    def forward(self, *,
+                query: torch.Tensor,
+                key: torch.Tensor,
+                value: torch.Tensor,
+                mask: Optional[torch.Tensor] = None):
+
+        # `query`, `key` and `value`  have shape `[seq_len, batch_size, d_model]`
+        seq_len, batch_size, _ = query.shape
+
+        if mask is not None:
+            mask = self.prepare_mask(mask, query.shape, key.shape)
+
+        # Prepare `query`, `key` and `value` for attention computation.
+        # These will then have shape `[seq_len, batch_size, heads, d_k]`.
+        query = self.query(query)
+        key = self.key(key)
+        value = self.value(value)
+
+        # Compute attention scores $Q K^\top$.
+        # This gives a tensor of shape `[seq_len, seq_len, batch_size, heads]`.
+        scores = self.get_scores(query, key)
+
+        # Scale scores $\frac{Q K^\top}{\sqrt{d_k}}$
+        scores *= self.scale
+
+        # Apply mask
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float('-inf'))
+
+        # $softmax$ attention along the key sequence dimension
+        # $\underset{seq}{softmax}\Bigg(\frac{Q K^\top}{\sqrt{d_k}}\Bigg)$
+        attn = self.softmax(scores)
+
+        # Apply dropout
+        attn = self.dropout(attn)
+
+        # Multiply by values
+        # $$\underset{seq}{softmax}\Bigg(\frac{Q K^\top}{\sqrt{d_k}}\Bigg)V$$
+        x = torch.einsum("ijbh,jbhd->ibhd", attn, value)
+
+        # Save attentions for any other calculations 
+        self.attn = attn.detach()
+
+        # Concatenate multiple heads
+        x = x.reshape(seq_len, batch_size, -1)
+
+        # Output layer
+        return self.output(x)
 
 class Highway(nn.Module):
     r"""Highway Layers
@@ -155,7 +276,9 @@ class SpERT(BertPreTrainedModel):
 
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
-
+        
+        self.multihead_attn = MultiHeadAttention(heads= 13, d_model= 2379)
+        
         self.init_weights()
 
         if freeze_transformer:
@@ -235,28 +358,15 @@ class SpERT(BertPreTrainedModel):
         full_ctx_pro = self.projection_context(full_ctx)
         entity_pairs_pro = self.projection_entity(entity_pairs)
         
-        # print("rel_ctx_pro:", rel_ctx_pro.size()) 
-        # print("rel_ctx: ", rel_ctx.size())
-        # print("entity_pairs:", entity_pairs1.size())
-
-        # multihead_attn = torch.nn.MultiheadAttention(256, 16)
-        # rel_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, rel_ctx_pro, rel_ctx_pro)
-        # full_local_ctx, attn_output_weights = multihead_attn(entity_pairs_pro, full_ctx_pro, full_ctx_pro)
-
         
-        # max pooling
-        # rel_ctx = rel_ctx.max(dim=2)[0]
-        # Đặt vector ngữ cảnh của các ứng viên thực thể lân cận hoặc liền kề thành không
-        # rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0
-        # rel_local_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0
-        # print("rel_local_ctx", rel_local_ctx.size())
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
         
         rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
         # rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
         rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
-        rel_repr2 = self.highwaynet(rel_repr2)
+        rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
+        
         rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
 
         # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
@@ -273,7 +383,7 @@ class SpERT(BertPreTrainedModel):
             # Các dòng sau được thực thi nếu self._use_entity_clf là một trong các giá trị "logits", "softmax", "onehot"   
             entity_clf_pairs =  util.batch_index(entity_clf, relations)
             entity_clf_pairs =  entity_clf_pairs.view(batch_size, entity_clf_pairs.shape[1], -1)
-            rel_repr = torch.cat([ rel_repr, entity_clf_pairs], dim=2)
+            rel_repr = torch.cat([rel_repr, entity_clf_pairs], dim=2)
         
         rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
@@ -478,5 +588,3 @@ _MODELS = {
 
 def get_model(name):
     return _MODELS[name]
-
-
