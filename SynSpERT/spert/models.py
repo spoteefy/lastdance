@@ -185,7 +185,7 @@ class Highway(nn.Module):
         self.non_linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
         self.linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
         self.gate = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, x):
         for layer in range(self.num_highway_layers):
@@ -242,7 +242,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 4808
+        relc_in_dim = 1536
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -257,8 +257,8 @@ class SpERT(BertPreTrainedModel):
 
         embed_dim = 793
         hidden_dim = config.hidden_size
-        proj_dim = 256
-        dropout_rate = 0.3
+        proj_dim = 512
+        dropout_rate = 0.1
 
         self.projection_entity = nn.Sequential(
             nn.Linear(1586, proj_dim),
@@ -274,10 +274,17 @@ class SpERT(BertPreTrainedModel):
             nn.Dropout(dropout_rate),
             )
 
+        self.projection_repr = nn.Sequential(
+            nn.Linear(1636, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
         
-        self.multihead_attn = MultiHeadAttention(heads= 13, d_model= 2379)
+        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
         
         self.init_weights()
 
@@ -358,16 +365,15 @@ class SpERT(BertPreTrainedModel):
         full_ctx_pro = self.projection_context(full_ctx)
         entity_pairs_pro = self.projection_entity(entity_pairs)
         
-        
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
         
-        rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        # rel_repr = torch.cat([full_local_ctx, rel_local_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        rel_repr2 = torch.cat([rel_ctx, entity_pairs], dim=2)
-        rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
-        
-        rel_repr = torch.cat([rel_repr2, rel_repr], dim=2)
+        rel_repr = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr = self.projection_repr(rel_repr)
+        # rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
+        rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
+        rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
+        rel_repr = torch.cat([rel_repr3, rel_repr2, rel_repr], dim=2)
 
         # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
         if (entity_clf != None):
