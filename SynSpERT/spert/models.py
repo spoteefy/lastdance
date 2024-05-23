@@ -233,16 +233,8 @@ class SpERT(BertPreTrainedModel):
            
         self.entity_classifier = nn.Linear( entc_in_dim, entity_types )
 
-        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier
-        # (ENT + SIZE)*2 + SPAN = 3H + SIZE
-
-        # relc_in_dim =  (config.hidden_size ) * 4 + size_embedding * 2 
-        # if (self._use_entity_clf != "none"): # Tăng cường biểu diễn cho cặp entity trong rel_classifier
-        #     relc_in_dim +=  entity_types * 2 
-        # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
-        #     relc_in_dim +=  self._pos_embedding * 4
-        
-        relc_in_dim = 2660
+        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier  
+        relc_in_dim = 768
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -257,7 +249,7 @@ class SpERT(BertPreTrainedModel):
 
         embed_dim = 793
         hidden_dim = config.hidden_size
-        proj_dim = 512
+        proj_dim = 256
         dropout_rate = 0.1
 
         self.projection_entity = nn.Sequential(
@@ -284,7 +276,7 @@ class SpERT(BertPreTrainedModel):
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
         
-        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
+        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 256)
         
         self.init_weights()
 
@@ -369,8 +361,8 @@ class SpERT(BertPreTrainedModel):
         # và các size embedding tương ứng
         
         rel_repr = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
-        # rel_repr = self.projection_repr(rel_repr)
-        # rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
+        rel_repr = self.projection_repr(rel_repr)
+        rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
         rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
         rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
         rel_repr = torch.cat([rel_repr3, rel_repr2, rel_repr], dim=2)
