@@ -4,7 +4,7 @@ import torch
 
 from spert import util  ##DKS
 from spert import constant
-# from spert import synspan
+# from spert import synspan #import synspan
 # from spert.synspan import get_index_span # span selector using Stanza's parse tree
 import sys
 
