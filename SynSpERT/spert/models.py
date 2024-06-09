@@ -9,10 +9,13 @@ from spert import sampling
 from spert import util
 import sys
 
+import math
+from typing import Optional, List
 import numpy as np
 from torch.autograd import Variable
 import torch.nn.functional as F
 
+# CÁC THÔNG SỐ
 # h: vector của câu đầu vào sinh ra từ BERT/SciBERT
 
 # Nếu có một lượng E token trong một câu và mỗi token được chuyển đổi 
@@ -22,7 +25,6 @@ import torch.nn.functional as F
 # Mỗi slot là một tokenID (số nguyên).
 
 # token: Định danh số (ID) của token mong muốn, ví dụ, 'CLS'
-
 # Ta thấy tensor 'h' chứa nhúng BERT/SciBERT của mỗi token trong câu, do đó
 # nhảy đến chỉ mục (index) của h[token]
 # h.shape= (10, 40, 768) => 10 câu mỗi câu có độ dài 40 token. [(Sentence embedding)+]
@@ -48,6 +50,156 @@ def get_token(h: torch.tensor, x: torch.tensor, token: int):  # token: Định d
                                             # thì kích thước token_h = (K, 768)
     
     return token_h
+
+class PrepareForMultiHeadAttention(nn.Module):
+
+    def __init__(self, d_model: int, heads: int, d_k: int, bias: bool):
+        super().__init__()
+        # Linear layer for linear transform
+        self.linear = nn.Linear(d_model, heads * d_k, bias=bias)
+        # Number of heads
+        self.heads = heads
+        # Number of dimensions in vectors in each head
+        self.d_k = d_k
+
+    def forward(self, x: torch.Tensor):
+        # Input has shape `[seq_len, batch_size, d_model]` or `[batch_size, d_model]`.
+        # We apply the linear transformation to the last dimension and split that into
+        # the heads.
+        head_shape = x.shape[:-1]
+
+        # Linear transform
+        x = self.linear(x)
+
+        # Split last dimension into heads
+        x = x.view(*head_shape, self.heads, self.d_k)
+
+        # Output has shape `[seq_len, batch_size, heads, d_k]` or `[batch_size, heads, d_model]`
+        return x
+
+class MultiHeadAttention(nn.Module):
+
+    def __init__(self, heads: int, d_model: int, dropout_prob: float = 0.1, bias: bool = True):
+
+        super().__init__()
+
+        # Number of features per head
+        self.d_k = d_model // heads
+        # Number of heads
+        self.heads = heads
+
+        # These transform the `query`, `key` and `value` vectors for multi-headed attention.
+        self.query = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=bias)
+        self.key = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=bias)
+        self.value = PrepareForMultiHeadAttention(d_model, heads, self.d_k, bias=True)
+
+        # Softmax for attention along the time dimension of `key`
+        self.softmax = nn.Softmax(dim=1)
+
+        # Output layer
+        self.output = nn.Linear(d_model, d_model)
+        # Dropout
+        self.dropout = nn.Dropout(dropout_prob)
+        # Scaling factor before the softmax
+        self.scale = 1 / math.sqrt(self.d_k)
+
+        # We store attentions so that it can be used for logging, or other computations if needed
+        self.attn = None
+
+    def get_scores(self, query: torch.Tensor, key: torch.Tensor):
+
+        # Calculate $Q K^\top$ or $S_{ijbh} = \sum_d Q_{ibhd} K_{jbhd}$
+        return torch.einsum('ibhd,jbhd->ijbh', query, key)
+
+    def prepare_mask(self, mask: torch.Tensor, query_shape: List[int], key_shape: List[int]):
+
+        assert mask.shape[0] == 1 or mask.shape[0] == query_shape[0]
+        assert mask.shape[1] == key_shape[0]
+        assert mask.shape[2] == 1 or mask.shape[2] == query_shape[1]
+
+        # Same mask applied to all heads.
+        mask = mask.unsqueeze(-1)
+
+        # resulting mask has shape `[seq_len_q, seq_len_k, batch_size, heads]`
+        return mask
+
+    def forward(self, *,
+                query: torch.Tensor,
+                key: torch.Tensor,
+                value: torch.Tensor,
+                mask: Optional[torch.Tensor] = None):
+
+        # `query`, `key` and `value`  have shape `[seq_len, batch_size, d_model]`
+        seq_len, batch_size, _ = query.shape
+
+        if mask is not None:
+            mask = self.prepare_mask(mask, query.shape, key.shape)
+
+        # Prepare `query`, `key` and `value` for attention computation.
+        # These will then have shape `[seq_len, batch_size, heads, d_k]`.
+        query = self.query(query)
+        key = self.key(key)
+        value = self.value(value)
+
+        # Compute attention scores $Q K^\top$.
+        # This gives a tensor of shape `[seq_len, seq_len, batch_size, heads]`.
+        scores = self.get_scores(query, key)
+
+        # Scale scores $\frac{Q K^\top}{\sqrt{d_k}}$
+        scores *= self.scale
+
+        # Apply mask
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float('-inf'))
+
+        # $softmax$ attention along the key sequence dimension
+        # $\underset{seq}{softmax}\Bigg(\frac{Q K^\top}{\sqrt{d_k}}\Bigg)$
+        attn = self.softmax(scores)
+
+        # Apply dropout
+        attn = self.dropout(attn)
+
+        # Multiply by values
+        # $$\underset{seq}{softmax}\Bigg(\frac{Q K^\top}{\sqrt{d_k}}\Bigg)V$$
+        x = torch.einsum("ijbh,jbhd->ibhd", attn, value)
+
+        # Save attentions for any other calculations 
+        self.attn = attn.detach()
+
+        # Concatenate multiple heads
+        x = x.reshape(seq_len, batch_size, -1)
+
+        # Output layer
+        return self.output(x)
+
+class Highway(nn.Module):
+    r"""Highway Layers
+    Args:
+        - num_highway_layers(int): number of highway layers.
+        - input_size(int): size of highway input.
+    """
+
+    def __init__(self, num_highway_layers, input_size):
+        super(Highway, self).__init__()
+        self.num_highway_layers = num_highway_layers
+        self.non_linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.linear = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.gate = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_highway_layers)])
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, x):
+        for layer in range(self.num_highway_layers):
+            gate = torch.sigmoid(self.gate[layer](x))
+            # Compute percentage of non linear information to be allowed for each element in x
+            non_linear = F.relu(self.non_linear[layer](x))
+            # Compute non linear information
+            linear = self.linear[layer](x)
+            # Compute linear information
+            x = gate * non_linear + (1 - gate) * linear
+            # Combine non linear and linear information according to gate
+            x = self.dropout(x)
+        return x
+
 
 class SpERT(BertPreTrainedModel):
     """ Span-based model to jointly extract entities and relations """
@@ -81,11 +233,9 @@ class SpERT(BertPreTrainedModel):
            
         self.entity_classifier = nn.Linear( entc_in_dim, entity_types )
 
-        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier
-        # (ENT + SIZE)*2 + SPAN = 3H + SIZE
-
-        relc_in_dim = 4015
-
+        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier  
+        relc_in_dim = 512
+        
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
         self.size_embeddings = nn.Embedding(100, size_embedding)
@@ -97,7 +247,37 @@ class SpERT(BertPreTrainedModel):
         self._entity_types = entity_types
         self._max_pairs = max_pairs
 
-        # Khởi tạo trọng số
+        embed_dim = 793
+        hidden_dim = config.hidden_size
+        proj_dim = 512
+        dropout_rate = 0.1
+
+        self.projection_entity = nn.Sequential(
+            nn.Linear(1636, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
+        self.projection_context = nn.Sequential(
+            nn.Linear(embed_dim, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
+        self.projection_repr = nn.Sequential(
+            nn.Linear(2429, proj_dim),
+            nn.ReLU(),
+            nn.LayerNorm(proj_dim),
+            nn.Dropout(dropout_rate),
+            )
+
+        self.highwaynet = Highway(num_highway_layers=2,
+                                    input_size = 2379)
+        
+        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
+        
         self.init_weights()
 
         if freeze_transformer:
@@ -106,6 +286,7 @@ class SpERT(BertPreTrainedModel):
             # Đóng băng tham số BERT (huấn luyện đóng băng)
             for param in self.bert.parameters():
                 param.requires_grad = False
+    
 
     def _run_entity_classifier (self, x: torch.tensor):
         y = self.entity_classifier(x)
@@ -127,10 +308,10 @@ class SpERT(BertPreTrainedModel):
         entity_spans_pool = m + hlarge.unsqueeze(1).repeat(1, entity_masks.shape[1], 1, 1) #torch.Size([10, 105, 40, 768])
         entity_spans_pool = entity_spans_pool.max(dim=2)[0]
         
-        #Lấy token 'CLS' làm đại diện ngữ cảnh ứng viên
+        # Lấy token 'CLS' làm đại diện ngữ cảnh ứng viên
         entity_ctx = get_token(h, encodings, self._cls_token)
         
-        #Tạo các biểu diễn ứng viên bao gồm ngữ cảnh, max-pool span và size embedding
+        # Tạo các biểu diễn ứng viên bao gồm ngữ cảnh, max-pool span và size embedding
         entity_repr = torch.cat([entity_ctx.unsqueeze(1).repeat(1, entity_spans_pool.shape[1], 1),
                                  entity_spans_pool, size_embeddings], dim=2)
         entity_repr = self.dropout(entity_repr)
@@ -157,7 +338,6 @@ class SpERT(BertPreTrainedModel):
 
         # Lấy biểu diễn cặp thực thể ứng viên
         entity_pairs = util.batch_index(entity_spans, relations)
-        entity_pairs1 = entity_pairs.max(dim=2)[0]
         entity_pairs = entity_pairs.view(batch_size, entity_pairs.shape[1], -1)
 
         # Lấy size embeddings tương ứng
@@ -168,37 +348,16 @@ class SpERT(BertPreTrainedModel):
         # Đánh dấu non-entity candidate tokens
         m = ((rel_masks == 0).float() * (-1e30)).unsqueeze(-1)
         rel_ctx =  m + hlarge1
-        # print("rel_ctx: ", rel_ctx.size())
-        # print("entity_pairs:", entity_pairs1.size())
+
         rel_ctx = rel_ctx.max(dim=2)[0]
-        full_ctx = rel_ctx # có vẻ là ngữ cảnh toàn cục
-        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 
-        # dựa vào rel_mask để đặt các ngữ cảnh 
-        # xung quanh là 0
-        rel_repr = torch.cat([rel_ctx, entity_pairs], dim=2)
-
-        # print("rel_ctx: ", rel_ctx.size())
-        # print("entity_pairs:", entity_pairs1.size())
-        multihead_attn = torch.nn.MultiheadAttention(2379, 13)
-        rel_repr, weights = multihead_attn(rel_repr, rel_repr, rel_repr)
-        rel_repr = torch.cat([rel_repr, entity_pairs, size_pair_embeddings], dim=2)
-
-        # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
-        if (entity_clf != None):
-         if (self._use_entity_clf == "logits" or self._use_entity_clf == "softmax" 
-                                              or self._use_entity_clf == "onehot"):
-            if (self._use_entity_clf == "softmax"):
-                entity_clf = torch.softmax(entity_clf, dim=-1)
-
-            elif (self._use_entity_clf == "onehot"):
-                dim = entity_clf.shape[-1]
-                entity_clf = torch.argmax(entity_clf, dim=-1)
-                entity_clf = torch.nn.functional.one_hot(entity_clf, dim) # Lấy kiểu thực thể (bao gồm none)
-            # Các dòng sau được thực thi nếu self._use_entity_clf là một trong các giá trị "logits", "softmax", "onehot"   
-            entity_clf_pairs =  util.batch_index(entity_clf, relations)
-            entity_clf_pairs =  entity_clf_pairs.view(batch_size, entity_clf_pairs.shape[1], -1)
-            rel_repr = torch.cat([ rel_repr, entity_clf_pairs], dim=2)
+        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
         
+        # Tạo các biểu diễn ứng viên 
+        rel_repr2 = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_repr2 = self.projection_repr(rel_repr2)
+        rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
+        rel_repr = rel_repr2
+
         rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
         return chunk_rel_logits
@@ -402,6 +561,3 @@ _MODELS = {
 
 def get_model(name):
     return _MODELS[name]
-
-
-
