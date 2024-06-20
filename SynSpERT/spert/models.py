@@ -210,8 +210,8 @@ class FusionGate(nn.Module):
 
     def forward(self, x, y):
         for layer in range(self.num_fusion_layers):
-            gate = torch.sigmoid(self.f_gate[layer](x))
-            u = gate * x + (1 - gate) * y
+            gate = torch.sigmoid(self.f_gate[layer](y))
+            u = gate * y + (1 - gate) * x
             # Combine non linear and linear information according to gate
             x = self.f_dropout(u)
         return x
@@ -483,7 +483,7 @@ class SynSpERT(SpERT):
 
     def __init__(self, config: SynSpERTConfig, cls_token: int, relation_types: int, entity_types: int,
                  size_embedding: int, prop_drop: float, freeze_transformer: bool, max_pairs: int = 100, 
-                 use_pos: bool = False,  
+                 use_pos: bool = True,  
                  use_entity_clf: str = "none"                 
                  ):
 
