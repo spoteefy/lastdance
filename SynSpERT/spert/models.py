@@ -234,7 +234,7 @@ class SpERT(BertPreTrainedModel):
         self.entity_classifier = nn.Linear( entc_in_dim, entity_types )
 
         # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier  
-        relc_in_dim = 1074
+        relc_in_dim = 2148
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -354,10 +354,10 @@ class SpERT(BertPreTrainedModel):
         # rel_repr2 = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
         # rel_repr2 = self.projection_repr(rel_repr2)
         # rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
-        entity_pairs = self.projection_entity(entity_pairs)
+        entity_pairs1 = self.projection_entity(entity_pairs)
         # size_pair_embeddings = self.projection_entity(size_pair_embeddings)
         rel_ctx = self.projection_context(rel_ctx)
-        rel_repr2 = self.multihead_attn(query = entity_pairs, key = rel_ctx, value = rel_ctx)
+        rel_repr2 = self.multihead_attn(query = entity_pairs1, key = rel_ctx, value = rel_ctx)
         rel_repr3 = torch.cat([rel_repr2, entity_pairs, size_pair_embeddings], dim=2)
         
         rel_repr = self.dropout(rel_repr3)
