@@ -234,7 +234,7 @@ class SpERT(BertPreTrainedModel):
         self.entity_classifier = nn.Linear( entc_in_dim, entity_types )
 
         # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier  
-        relc_in_dim = 512
+        relc_in_dim = 1074
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -249,11 +249,11 @@ class SpERT(BertPreTrainedModel):
 
         embed_dim = 793
         hidden_dim = config.hidden_size
-        proj_dim = 256
+        proj_dim = 512
         dropout_rate = 0.1
 
         self.projection_entity = nn.Sequential(
-            nn.Linear(1636, proj_dim),
+            nn.Linear(1586, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
@@ -267,7 +267,7 @@ class SpERT(BertPreTrainedModel):
             )
 
         self.projection_repr = nn.Sequential(
-            nn.Linear(1636, proj_dim),
+            nn.Linear(2429, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
@@ -276,7 +276,7 @@ class SpERT(BertPreTrainedModel):
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
         
-        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 256)
+        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
         
         self.init_weights()
 
@@ -348,20 +348,20 @@ class SpERT(BertPreTrainedModel):
         # Đánh dấu non-entity candidate tokens
         m = ((rel_masks == 0).float() * (-1e30)).unsqueeze(-1)
         rel_ctx =  m + hlarge1
-
         rel_ctx = rel_ctx.max(dim=2)[0]
-        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
-
-        rel_ctx_pro = self.projection_context(rel_ctx)
-        entity_pairs_pro = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
-        entity_pairs_pro = self.projection_entity(entity_pairs_pro)
-        
+        # rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
         # Tạo các biểu diễn ứng viên 
+        # rel_repr2 = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        # rel_repr2 = self.projection_repr(rel_repr2)
+        # rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
+        entity_pairs = self.projection_entity(entity_pairs)
+        # size_pair_embeddings = self.projection_entity(size_pair_embeddings)
+        rel_ctx = self.projection_context(rel_ctx)
+        rel_repr2 = self.multihead_attn(query = entity_pairs, key = rel_ctx, value = rel_ctx)
+        rel_repr3 = torch.cat([rel_repr2, entity_pairs, size_pair_embeddings], dim=2)
         
-        rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
-        rel_repr = torch.cat([rel_repr2, entity_pairs_pro], dim=2)
+        rel_repr = self.dropout(rel_repr3)
 
-        rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
         return chunk_rel_logits
 
