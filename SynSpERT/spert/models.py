@@ -200,6 +200,21 @@ class Highway(nn.Module):
             x = self.dropout(x)
         return x
 
+class FusionGate(nn.Module):
+
+    def __init__(self, num_fusion_layers, input_size):
+        super(FusionGate, self).__init__()
+        self.num_fusion_layers = num_fusion_layers
+        self.f_gate = nn.ModuleList([nn.Linear(input_size, input_size) for _ in range(self.num_fusion_layers)])
+        self.f_dropout = nn.Dropout(0.1)
+
+    def forward(self, x, y):
+        for layer in range(self.num_fusion_layers):
+            gate = torch.sigmoid(self.f_gate[layer](x))
+            u = gate * x + (1 - gate) * y
+            # Combine non linear and linear information according to gate
+            x = self.f_dropout(u)
+        return x
 
 class SpERT(BertPreTrainedModel):
     """ Span-based model to jointly extract entities and relations """
@@ -233,7 +248,15 @@ class SpERT(BertPreTrainedModel):
            
         self.entity_classifier = nn.Linear( entc_in_dim, entity_types )
 
-        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier  
+        # relc_in_dim cho biết kích thước biểu diễn cho rel_classifier
+        # (ENT + SIZE)*2 + SPAN = 3H + SIZE
+
+        # relc_in_dim =  (config.hidden_size ) * 4 + size_embedding * 2 
+        # if (self._use_entity_clf != "none"): # Tăng cường biểu diễn cho cặp entity trong rel_classifier
+        #     relc_in_dim +=  entity_types * 2 
+        # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
+        #     relc_in_dim +=  self._pos_embedding * 4
+        
         relc_in_dim = 2148
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
@@ -267,7 +290,7 @@ class SpERT(BertPreTrainedModel):
             )
 
         self.projection_repr = nn.Sequential(
-            nn.Linear(2429, proj_dim),
+            nn.Linear(1636, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
             nn.Dropout(dropout_rate),
@@ -275,7 +298,10 @@ class SpERT(BertPreTrainedModel):
 
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
-        
+
+        self.fusion_gate = FusionGate(num_fusion_layers=2,
+                                    input_size = 512)
+
         self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
         
         self.init_weights()
@@ -348,20 +374,43 @@ class SpERT(BertPreTrainedModel):
         # Đánh dấu non-entity candidate tokens
         m = ((rel_masks == 0).float() * (-1e30)).unsqueeze(-1)
         rel_ctx =  m + hlarge1
-        rel_ctx = rel_ctx.max(dim=2)[0]
-        # rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
-        # Tạo các biểu diễn ứng viên 
-        # rel_repr2 = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
-        # rel_repr2 = self.projection_repr(rel_repr2)
-        # rel_repr2 = self.multihead_attn(query = rel_repr2, key = rel_repr2, value = rel_repr2)
-        entity_pairs1 = self.projection_entity(entity_pairs)
-        # size_pair_embeddings = self.projection_entity(size_pair_embeddings)
-        rel_ctx = self.projection_context(rel_ctx)
-        rel_repr2 = self.multihead_attn(query = entity_pairs1, key = rel_ctx, value = rel_ctx)
-        rel_repr3 = torch.cat([rel_repr2, entity_pairs, size_pair_embeddings], dim=2)
-        
-        rel_repr = self.dropout(rel_repr3)
 
+        rel_ctx = rel_ctx.max(dim=2)[0]
+        full_ctx = rel_ctx # ngữ cảnh toàn cục
+        rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
+
+        rel_ctx_pro = self.projection_context(rel_ctx)
+        full_ctx_pro = self.projection_context(full_ctx)
+        entity_pairs_pro = self.projection_entity(entity_pairs)
+        
+        # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
+        # và các size embedding tương ứng
+        
+        rel_repr = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
+        # rel_repr = self.projection_repr(rel_repr)
+        # rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
+        rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
+        rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
+        rel_ctx = self.fusion_gate(x = rel_repr2, y = rel_repr3)
+        rel_repr = torch.cat([rel_ctx, rel_repr], dim=2)
+
+        # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
+        if (entity_clf != None):
+         if (self._use_entity_clf == "logits" or self._use_entity_clf == "softmax" 
+                                              or self._use_entity_clf == "onehot"):
+            if (self._use_entity_clf == "softmax"):
+                entity_clf = torch.softmax(entity_clf, dim=-1)
+
+            elif (self._use_entity_clf == "onehot"):
+                dim = entity_clf.shape[-1]
+                entity_clf = torch.argmax(entity_clf, dim=-1)
+                entity_clf = torch.nn.functional.one_hot(entity_clf, dim) # Lấy kiểu thực thể (bao gồm none)
+            # Các dòng sau được thực thi nếu self._use_entity_clf là một trong các giá trị "logits", "softmax", "onehot"   
+            entity_clf_pairs =  util.batch_index(entity_clf, relations)
+            entity_clf_pairs =  entity_clf_pairs.view(batch_size, entity_clf_pairs.shape[1], -1)
+            rel_repr = torch.cat([rel_repr, entity_clf_pairs], dim=2)
+        
+        rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
         return chunk_rel_logits
 
