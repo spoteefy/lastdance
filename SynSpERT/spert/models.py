@@ -257,7 +257,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 2148
+        relc_in_dim = 3222
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -379,9 +379,9 @@ class SpERT(BertPreTrainedModel):
         full_ctx = rel_ctx # ngữ cảnh toàn cục
         rel_ctx[rel_masks.to(torch.uint8).any(-1) == 0] = 0 # ngữ cảnh cục bộ giữa entity_pair
 
-        rel_ctx_pro = self.projection_context(rel_ctx)
-        full_ctx_pro = self.projection_context(full_ctx)
-        entity_pairs_pro = self.projection_entity(entity_pairs)
+        #rel_ctx_pro = self.projection_context(rel_ctx)
+        #full_ctx_pro = self.projection_context(full_ctx)
+        #entity_pairs_pro = self.projection_entity(entity_pairs)
         
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
@@ -389,10 +389,10 @@ class SpERT(BertPreTrainedModel):
         rel_repr = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
         # rel_repr = self.projection_repr(rel_repr)
         # rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
-        rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
-        rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
-        rel_ctx = self.fusion_gate(x = rel_repr2, y = rel_repr3)
-        rel_repr = torch.cat([rel_ctx, rel_repr], dim=2)
+        #rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
+        #rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
+        #rel_ctx = self.fusion_gate(x = rel_repr2, y = rel_repr3)
+        rel_repr = torch.cat([full_ctx, rel_ctx, rel_repr], dim=2)
         
         rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
