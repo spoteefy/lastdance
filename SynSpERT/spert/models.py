@@ -273,27 +273,27 @@ class SpERT(BertPreTrainedModel):
         embed_dim = 793
         hidden_dim = config.hidden_size
         proj_dim = 512
-        dropout_rate = 0.1
+        #dropout_rate = 0.1
 
         self.projection_entity = nn.Sequential(
             nn.Linear(1586, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
-            nn.Dropout(dropout_rate),
+            #nn.Dropout(dropout_rate),
             )
 
         self.projection_context = nn.Sequential(
             nn.Linear(embed_dim, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
-            nn.Dropout(dropout_rate),
+            #nn.Dropout(dropout_rate),
             )
 
         self.projection_repr = nn.Sequential(
             nn.Linear(1636, proj_dim),
             nn.ReLU(),
             nn.LayerNorm(proj_dim),
-            nn.Dropout(dropout_rate),
+            #nn.Dropout(dropout_rate),
             )
 
         self.highwaynet = Highway(num_highway_layers=2,
@@ -393,22 +393,6 @@ class SpERT(BertPreTrainedModel):
         rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
         rel_ctx = self.fusion_gate(x = rel_repr2, y = rel_repr3)
         rel_repr = torch.cat([rel_ctx, rel_repr], dim=2)
-
-        # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
-        if (entity_clf != None):
-         if (self._use_entity_clf == "logits" or self._use_entity_clf == "softmax" 
-                                              or self._use_entity_clf == "onehot"):
-            if (self._use_entity_clf == "softmax"):
-                entity_clf = torch.softmax(entity_clf, dim=-1)
-
-            elif (self._use_entity_clf == "onehot"):
-                dim = entity_clf.shape[-1]
-                entity_clf = torch.argmax(entity_clf, dim=-1)
-                entity_clf = torch.nn.functional.one_hot(entity_clf, dim) # Lấy kiểu thực thể (bao gồm none)
-            # Các dòng sau được thực thi nếu self._use_entity_clf là một trong các giá trị "logits", "softmax", "onehot"   
-            entity_clf_pairs =  util.batch_index(entity_clf, relations)
-            entity_clf_pairs =  entity_clf_pairs.view(batch_size, entity_clf_pairs.shape[1], -1)
-            rel_repr = torch.cat([rel_repr, entity_clf_pairs], dim=2)
         
         rel_repr = self.dropout(rel_repr)
         chunk_rel_logits = self._run_rel_classifier(rel_repr)
