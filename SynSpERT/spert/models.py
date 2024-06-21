@@ -242,7 +242,7 @@ class SpERT(BertPreTrainedModel):
         # if (self._use_pos): # Tăng cường biểu diễn khi sử dụng thẻ POS-tagging
         #     relc_in_dim +=  self._pos_embedding * 4
         
-        relc_in_dim = 2660
+        relc_in_dim = 7187
         
         self.rel_classifier = nn.Linear(relc_in_dim, relation_types)
    
@@ -257,7 +257,7 @@ class SpERT(BertPreTrainedModel):
 
         embed_dim = 793
         hidden_dim = config.hidden_size
-        proj_dim = 512
+        proj_dim = 256
         dropout_rate = 0.1
 
         self.projection_entity = nn.Sequential(
@@ -274,17 +274,10 @@ class SpERT(BertPreTrainedModel):
             nn.Dropout(dropout_rate),
             )
 
-        self.projection_repr = nn.Sequential(
-            nn.Linear(1636, proj_dim),
-            nn.ReLU(),
-            nn.LayerNorm(proj_dim),
-            nn.Dropout(dropout_rate),
-            )
-
         self.highwaynet = Highway(num_highway_layers=2,
                                     input_size = 2379)
         
-        self.multihead_attn = MultiHeadAttention(heads= 8, d_model= 512)
+        self.multihead_attn = MultiHeadAttention(heads= 13, d_model= 2379)
         
         self.init_weights()
 
@@ -365,14 +358,14 @@ class SpERT(BertPreTrainedModel):
         full_ctx_pro = self.projection_context(full_ctx)
         entity_pairs_pro = self.projection_entity(entity_pairs)
         
+        
         # Tạo các biểu diễn ứng viên mối quan hệ bao gồm ngữ cảnh, max-pooled cặp ứng viên thực thể  
         # và các size embedding tương ứng
         
-        rel_repr = torch.cat([entity_pairs, size_pair_embeddings], dim=2)
-        # rel_repr = self.projection_repr(rel_repr)
-        # rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
-        rel_repr2 = self.multihead_attn(query = entity_pairs_pro, key = rel_ctx_pro, value = rel_ctx_pro)
-        rel_repr3 = self.multihead_attn(query = entity_pairs_pro, key = full_ctx_pro, value = full_ctx_pro)
+        rel_repr = torch.cat([rel_ctx, entity_pairs, size_pair_embeddings], dim=2)
+        rel_reprtmp = torch.cat([rel_ctx, entity_pairs], dim=2)
+        rel_repr2 = self.multihead_attn(query = rel_reprtmp, key = rel_reprtmp, value = rel_reprtmp)
+        rel_repr3 = self.highwaynet(rel_reprtmp)
         rel_repr = torch.cat([rel_repr3, rel_repr2, rel_repr], dim=2)
 
         # Tăng cường biểu diễn cho cặp ứng viên thực thể: logits, softmax hoặc onehot
