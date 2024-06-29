@@ -43,7 +43,7 @@ if __name__ == "__main__":
         --size_embedding 25 --train_batch_size 10 \
          {USE_POS} --pos_embedding 25 \
         --use_entity_clf {USE_ENTITY_CLF} \
-        --eval_batch_size 2 --epochs 40 --lr 5e-5 --lr_warmup 0.1 \
+        --eval_batch_size 2 --epochs 25 --lr 5e-5 --lr_warmup 0.1 \
         --weight_decay 0.01 --max_grad_norm 1.0 --prop_drop 0.2 \
         --neg_entity_count 100 --neg_relation_count 100 \
         --max_span_size 10 --rel_filter_threshold 0.4 --max_pairs 1000 \
