@@ -1,6 +1,6 @@
 
 <center>
-<font size=5pt;>
+<font size=12pt;>
 <strong>
 S5TH: Span-based EnTiTy and relaTion Transformer wiTH pos-embedding and dual fusion module
 </strong>
