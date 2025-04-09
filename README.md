@@ -27,4 +27,5 @@ Tất cả công việc được lưu tại https://github.com/spoteefy/lastdanc
 **GHI CHÚ**
 
 Mô hình này được sửa đổi dựa trên SpERT ([https://github.com/lavis-nlp/spert/](https://github.com/lavis-nlp/spert/))
+
 Cảm ơn Debarshi Kumar Sanyal (dksanyal) đã cung cấp mã nguồn về SpERT để tôi có thể thực hiện đồ án này.
