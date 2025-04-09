@@ -2,22 +2,17 @@
 <center>
 <font size=12pt;>
 <strong>
-S5TH: Span-based EnTiTy and relaTion Transformer wiTH pos-embedding and dual fusion module
+S5TH: Span-based enTiTy and relaTion Transformer wiTH pos-embedding and dual fusion module
 </strong>
 </font> 
 </center>
 
 ___
 **Sinh viên:** Nguyễn Văn Thọ
-
 **MSSV:** 20204694
-
 **Chương trình**: Khoa học máy tính 2020 - TCNTT
-
-**Tên đề tài**: Nhận diện thực thể và trích rút quan hệ đồng thời trên tập tài liệu khoa học
-
+**Đề tài**: Nhận diện thực thể và trích rút quan hệ đồng thời trên tập tài liệu khoa học
 **GVHD**: PGS. TS. Nguyễn Thị Kim Anh
-
 **Kỳ học**: 2023.2
 ___
 **HƯỚNG DẪN**
@@ -31,5 +26,4 @@ Tất cả công việc được lưu tại https://github.com/spoteefy/lastdanc
 **GHI CHÚ**
 
 Mô hình này được sửa đổi dựa trên SpERT ([https://github.com/lavis-nlp/spert/](https://github.com/lavis-nlp/spert/))
-
 Cảm ơn Debarshi Kumar Sanyal (dksanyal) đã cung cấp mã nguồn về SpERT để tôi có thể thực hiện đồ án này.
