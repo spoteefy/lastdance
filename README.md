@@ -8,11 +8,12 @@ S5TH: Span-based enTiTy and relaTion Transformer wiTH pos-embedding and dual fus
 </center>
 
 ___
-**Sinh viên:** Nguyễn Văn Thọ
-**MSSV:** 20204694
-**Chương trình**: Khoa học máy tính 2020 - TCNTT
+**Sinh viên:** Nguyễn Văn Thọ | 20204694 | Khoa học máy tính 2020
+
 **Đề tài**: Nhận diện thực thể và trích rút quan hệ đồng thời trên tập tài liệu khoa học
+
 **GVHD**: PGS. TS. Nguyễn Thị Kim Anh
+
 **Kỳ học**: 2023.2
 ___
 **HƯỚNG DẪN**
